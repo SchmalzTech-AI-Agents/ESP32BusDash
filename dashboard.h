@@ -39,8 +39,8 @@ const char index_html[] PROGMEM = R"rawliteral(
 <body>
     <h1>International 4300 Tactical</h1>
     <div class="links-bar">
-        <a href="/faults" target="_blank">📋 View Flash Logs</a>
-        <a href="/clearfaults" onclick="return confirm('Wipe logs?');">⚠️ Wipe Memory</a>
+        <a href="/faults" target="_blank">[LOGS] View Flash Logs</a>
+        <a href="/clearfaults" onclick="return confirm('Wipe logs?');">[WARN] Wipe Memory</a>
     </div>
     <div id="ws-status" class="status">Connecting...</div>
     <div class="lamp-container">
@@ -67,7 +67,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="card"><h2>Fuel Level</h2><div class="val" id="fuel">0</div><div class="unit">%</div></div>
     </div>
     <div id="dtc-anchor" class="dtc-footer">
-        <div class="dtc-title">⚠️ Active System Fault Registered</div>
+        <div class="dtc-title">[WARN] Active System Fault Registered</div>
         <div id="dtc-text" class="dtc-desc">SPN: 0 | FMI: 0</div>
     </div>
     <script>
