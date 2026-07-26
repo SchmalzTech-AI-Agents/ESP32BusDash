@@ -7,6 +7,8 @@ The dashboard decodes standard fixed-layout J1939 application PGNs. The primary 
 - PGN 65198: SPNs 1087/1088 service-brake air pressure, bytes 3/4, 8 kPa/bit.
 - PGN 61445 (ETC2): SPN 524 selected gear, byte 1, offset -125.
 - PGN 65248: SPN 245 total vehicle distance, bytes 5-8, 0.125 km/bit.
+- PGN 65265 (CCVS1): SPN 70 parking brake switch, byte 1 bits 3-4.
+- PGN 61441 (EBC1): SPN 563 ABS active status, byte 1 bits 5-6.
 - PGN 65226 (DM1): diagnostic lamp status and active DTCs.
 
 These PGNs are not DM15, DM13, DM16, or DM1 multi-SPN diagnostic containers. Their SPNs are defined at fixed bit/byte positions by the J1939 application-layer message definitions.

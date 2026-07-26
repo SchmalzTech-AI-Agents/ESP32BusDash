@@ -15,6 +15,8 @@ volatile float oilPressure = 0, transTemp = 0, airPrimary = 0, airSecondary = 0;
 volatile float batteryVoltage = 0, turboBoostPSI = 0, fuelRateGPH = 0, engineLoadPct = 0;
 volatile uint32_t totalOdometerMiles = 0; 
 volatile uint8_t selectedGearRaw = 0; 
+volatile uint8_t parkBrakeState = 0;
+volatile uint8_t absFault = 0;
 
 volatile uint8_t lampMIL = 0, lampRedStop = 0, lampAmberWarning = 0, lampProtect = 0, lampWaitToStart = 0; 
 volatile uint32_t activeSPN = 0;
@@ -154,6 +156,9 @@ void loop() {
         break;
       case 65265:
         {
+          // CCVS1 SPN 70 (Parking Brake Switch) is byte 1, bits 3-4.
+          parkBrakeState = (message.data[0] >> 2) & 0x03;
+
           float raw = (((message.data[2] << 8) | message.data[1]) * 0.00390625) * 0.621371;
           if (raw <= 120.0) vehicleSpeed = (alphaFast * raw) + ((1.0 - alphaFast) * vehicleSpeed);
         }
@@ -218,6 +223,13 @@ void loop() {
           if (rawPct <= 100.0) engineLoadPct = (alphaFast * rawPct) + ((1.0 - alphaFast) * engineLoadPct);
         }
         break;
+      case 61441:
+        {
+          // EBC1 SPN 563 (Anti-Lock Braking active) is byte 1, bits 5-6.
+          // State 01 means ABS intervention/fault indication active.
+          absFault = (((message.data[0] >> 4) & 0x03) == 0x01) ? 1 : 0;
+        }
+        break;
       case 61445:
         // ETC2 SPN 524 (Transmission Selected Gear) is byte 1.
         selectedGearRaw = message.data[0];
@@ -275,6 +287,7 @@ void loop() {
       json += "\"trans\":" + String(transTemp) + ",\"air1\":" + String(airPrimary) + ",";
       json += "\"air2\":" + String(airSecondary) + ",\"volt\":" + String(batteryVoltage) + ",";
       json += "\"odo\":" + String(totalOdometerMiles) + ",\"fuel\":" + String(fuelLevel) + ",";
+      json += "\"park\":" + String(parkBrakeState) + ",\"abs\":" + String(absFault) + ",";
       json += "\"lMIL\":" + String(lampMIL) + ",\"lRED\":" + String(lampRedStop) + ",";
       json += "\"lAMB\":" + String(lampAmberWarning) + ",\"lPRT\":" + String(lampProtect) + ",";
       json += "\"lWTS\":" + String(lampWaitToStart) + ",\"spn\":" + String(activeSPN) + ",\"fmi\":" + String(activeFMI);
