@@ -121,7 +121,18 @@ void setup() {
   server.begin();
 }
 
-//Part 3: Main Processing Loop (Bus Decoders)
+// Part 3: Main Processing Loop (Bus Decoders)
+
+uint16_t readLittleEndian16(const uint8_t *data, uint8_t index) {
+  return (uint16_t)data[index] | ((uint16_t)data[index + 1] << 8);
+}
+
+uint32_t readLittleEndian32(const uint8_t *data, uint8_t index) {
+  return (uint32_t)data[index] |
+         ((uint32_t)data[index + 1] << 8) |
+         ((uint32_t)data[index + 2] << 16) |
+         ((uint32_t)data[index + 3] << 24);
+}
 
 void loop() {
   twai_message_t message;
@@ -133,8 +144,12 @@ void loop() {
     switch(pgn) {
       case 61444:
         {
-          float raw = ((message.data[1] << 8) | message.data[0]) * 0.125;
-          if (raw <= 8000.0) engineRPM = (alphaFast * raw) + ((1.0 - alphaFast) * engineRPM);
+          // EEC1 SPN 190 is bytes 4-5 (zero-based bytes 3-4), not bytes 1-2.
+          uint16_t rawRPM = readLittleEndian16(message.data, 3);
+          if (rawRPM != 0xFFFF) {
+            float raw = rawRPM * 0.125;
+            if (raw <= 8000.0) engineRPM = (alphaFast * raw) + ((1.0 - alphaFast) * engineRPM);
+          }
         }
         break;
       case 65265:
@@ -161,10 +176,12 @@ void loop() {
           if (raw > -40.0 && raw < 400.0) transTemp = (alphaSlow * raw) + ((1.0 - alphaSlow) * transTemp);
         }
         break;
-      case 65257:
+      case 65198:
         {
-          float raw1 = (message.data[0] * 4.0) * 0.145038;
-          float raw2 = (message.data[1] * 4.0) * 0.145038;
+          // Air Supply Pressure: SPN 1087 is byte 3 and SPN 1088 is byte 4.
+          // Both signals use 8 kPa/bit and are converted to PSI here.
+          float raw1 = (message.data[2] * 8.0) * 0.145038;
+          float raw2 = (message.data[3] * 8.0) * 0.145038;
           if (raw1 <= 200.0) airPrimary = (alphaFast * raw1) + ((1.0 - alphaFast) * airPrimary);
           if (raw2 <= 200.0) airSecondary = (alphaFast * raw2) + ((1.0 - alphaFast) * airSecondary);
         }
@@ -202,16 +219,19 @@ void loop() {
         }
         break;
       case 61445:
-        selectedGearRaw = message.data[3]; 
+        // ETC2 SPN 524 (Transmission Selected Gear) is byte 1.
+        selectedGearRaw = message.data[0];
         break;
       case 65252:
         lampWaitToStart = (((message.data[1] >> 6) & 0x03) == 0x01) ? 1 : 0;
         break;
       case 65248:
         {
-          uint32_t rawKm = ((uint32_t)message.data[3] << 24) | ((uint32_t)message.data[2] << 16) | 
-                           ((uint32_t)message.data[1] << 8)  | message.data[0];
-          if (rawKm != 0xFFFFFFFF && rawKm > 0) totalOdometerMiles = (rawKm * 0.125) * 0.621371;
+          // Vehicle Distance SPN 245 (total distance) is bytes 5-8.
+          uint32_t rawKm = readLittleEndian32(message.data, 4);
+          if (rawKm != 0xFFFFFFFF && rawKm > 0) {
+            totalOdometerMiles = (uint32_t)((rawKm * 0.125) * 0.621371);
+          }
         }
         break;
       case 65226:
