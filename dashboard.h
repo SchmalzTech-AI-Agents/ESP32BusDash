@@ -119,10 +119,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                 let cleanVolt = (d.volt > 32) ? 0.0 : d.volt;
 
                 let gearText = "--";
-                if (d.gear == 125) gearText = "N";
-                else if (d.gear == 126) gearText = "R";
-                else if (d.gear == 251) gearText = "P";
-                else if (d.gear >= 127 && d.gear <= 136) gearText = (d.gear - 126).toString();
+                // ETC2 SPN 524 is transmitted as gear + 125.
+                if (d.gear == 124) gearText = "R";
+                else if (d.gear == 125) gearText = "N";
+                else if (d.gear == 126) gearText = "D";
+                else if (d.gear == 127) gearText = "4";
+                else if (d.gear == 128) gearText = "2";
+                else if (d.gear == 129) gearText = "1";
 
                 document.getElementById('odo').innerText = d.odo.toLocaleString();
                 document.getElementById('gear').innerText = gearText;

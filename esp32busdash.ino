@@ -18,6 +18,11 @@ volatile uint8_t selectedGearRaw = 0;
 volatile uint8_t parkBrakeState = 0;
 volatile uint8_t absFault = 0;
 
+// Require repeated valid samples before changing the park-brake indicator.
+uint8_t parkBrakeCandidate = 0;
+uint8_t parkBrakeCandidateCount = 0;
+const uint8_t parkBrakeDebounceSamples = 3;
+
 volatile uint8_t lampMIL = 0, lampRedStop = 0, lampAmberWarning = 0, lampProtect = 0, lampWaitToStart = 0; 
 volatile uint32_t activeSPN = 0;
 volatile uint8_t activeFMI = 0;
@@ -157,7 +162,19 @@ void loop() {
       case 65265:
         {
           // CCVS1 SPN 70 (Parking Brake Switch) is byte 1, bits 3-4.
-          parkBrakeState = (message.data[0] >> 2) & 0x03;
+          uint8_t parkBrakeSample = (message.data[0] >> 2) & 0x03;
+          // 00=off and 01=on are valid; 10=error and 11=not available.
+          if (parkBrakeSample <= 1) {
+            if (parkBrakeSample == parkBrakeCandidate) {
+              if (parkBrakeCandidateCount < parkBrakeDebounceSamples) parkBrakeCandidateCount++;
+            } else {
+              parkBrakeCandidate = parkBrakeSample;
+              parkBrakeCandidateCount = 1;
+            }
+            if (parkBrakeCandidateCount >= parkBrakeDebounceSamples) {
+              parkBrakeState = parkBrakeCandidate;
+            }
+          }
 
           float raw = (((message.data[2] << 8) | message.data[1]) * 0.00390625) * 0.621371;
           if (raw <= 120.0) vehicleSpeed = (alphaFast * raw) + ((1.0 - alphaFast) * vehicleSpeed);
@@ -243,6 +260,16 @@ void loop() {
           uint32_t rawKm = readLittleEndian32(message.data, 4);
           if (rawKm != 0xFFFFFFFF && rawKm > 0) {
             totalOdometerMiles = (uint32_t)((rawKm * 0.125) * 0.621371);
+          }
+        }
+        break;
+      case 65217:
+        {
+          // VDHR SPN 917: high-resolution total distance is bytes 1-4,
+          // encoded at 5 metres/bit. Prefer it when the vehicle provides it.
+          uint32_t rawMeters = readLittleEndian32(message.data, 0);
+          if (rawMeters != 0xFFFFFFFF && rawMeters > 0) {
+            totalOdometerMiles = (uint32_t)((rawMeters * 5.0) / 1609.344);
           }
         }
         break;
