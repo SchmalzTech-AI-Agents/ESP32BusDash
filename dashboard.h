@@ -19,6 +19,8 @@ const char index_html[] PROGMEM = R"rawliteral(
         .lamp.amber.on { background: #b38f00; color: #000; box-shadow: 0 0 10px #b38f00; }
         .lamp.protect.on { background: #0052cc; color: #fff; box-shadow: 0 0 10px #0052cc; }
         .lamp.wts.on { background: #e65c00; color: #fff; box-shadow: 0 0 12px #e65c00; }
+        .lamp.park.on { background: #ffcc00; color: #000; box-shadow: 0 0 10px #ffcc00; }
+        .lamp.abs.on { background: #cc0000; color: #fff; box-shadow: 0 0 10px #cc0000; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; max-width: 650px; margin: auto; }
         .card { background: #11141d; padding: 12px; border-radius: 10px; border: 1px solid #1c2130; }
         .card.wide { grid-column: span 2; background: #151a26; border-color: #263047; }
@@ -45,6 +47,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     <div id="ws-status" class="status">Connecting...</div>
     <div class="lamp-container">
         <div id="lamp-wts" class="lamp wts">WAIT TO START</div>
+        <div id="lamp-park" class="lamp park">PARK BRAKE</div>
+        <div id="lamp-abs" class="lamp abs">ABS FAULT</div>
         <div id="lamp-mil" class="lamp mil">MIL</div>
         <div id="lamp-red" class="lamp red">STOP</div>
         <div id="lamp-amber" class="lamp amber">WARN</div>
@@ -140,6 +144,8 @@ const char index_html[] PROGMEM = R"rawliteral(
                 toggleLamp('lamp-amber', d.lAMB);
                 toggleLamp('lamp-protect', d.lPRT);
                 toggleLamp('lamp-wts', d.lWTS);
+                toggleLamp('lamp-park', d.park == 1);
+                toggleLamp('lamp-abs', d.abs == 1);
 
                 toggleAlert('c-coolant', d.coolant > 220);
                 toggleAlert('c-air1', d.air1 < 90);
