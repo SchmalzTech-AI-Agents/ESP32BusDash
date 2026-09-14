@@ -1,301 +1,206 @@
-// Part 1: Configuration, Globals, and Fault Logging
+#include <Arduino.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
-#include "esp_partition.h"
-#include "driver/twai.h"
+#include <SD_MMC.h>
+#include <driver/twai.h>
+#include "cyd35_pins.h"
 #include "dashboard.h"
 
-#define RX_PIN GPIO_NUM_4
-#define TX_PIN GPIO_NUM_5
-#define BUZZER_PIN GPIO_NUM_13
+// The ESP32-S3 TWAI controller is connected through a 3.3 V CAN transceiver.
+// This firmware is receive-only; it cannot acknowledge or transmit onto the vehicle bus.
+constexpr gpio_num_t CAN_RX_PIN = static_cast<gpio_num_t>(Cyd35Pins::CAN_RX);
+constexpr gpio_num_t CAN_TX_PIN = static_cast<gpio_num_t>(Cyd35Pins::CAN_TX);
+constexpr uint32_t CAN_BITRATE = 250000;
+constexpr size_t CAPTURE_FLUSH_BYTES = 2048;
 
 volatile float engineRPM = 0, vehicleSpeed = 0, coolantTemp = 0, fuelLevel = 0;
 volatile float oilPressure = 0, transTemp = 0, airPrimary = 0, airSecondary = 0;
 volatile float batteryVoltage = 0, turboBoostPSI = 0, fuelRateGPH = 0, engineLoadPct = 0;
-volatile uint32_t totalOdometerMiles = 0; 
-volatile uint8_t selectedGearRaw = 0; 
-volatile uint8_t parkBrakeState = 0;
-volatile uint8_t absFault = 0;
-
-volatile uint8_t lampMIL = 0, lampRedStop = 0, lampAmberWarning = 0, lampProtect = 0, lampWaitToStart = 0; 
-volatile uint32_t activeSPN = 0;
-volatile uint8_t activeFMI = 0;
-
-const float alphaFast = 0.15;
-const float alphaSlow = 0.05;
-unsigned long lastBroadcastTime = 0;
-const unsigned long broadcastInterval = 40; 
-bool alarmActive = false;
-unsigned long lastBuzzerToggle = 0;
-bool buzzerState = false;
-
-uint32_t lastLoggedSPN = 0;
-uint8_t lastLoggedFMI = 0;
-unsigned long lastLogTime = 0;
+volatile uint32_t totalOdometerMiles = 0, activeSPN = 0;
+volatile uint8_t selectedGearRaw = 0, activeFMI = 0;
+volatile uint8_t lampMIL = 0, lampRedStop = 0, lampAmberWarning = 0, lampProtect = 0, lampWaitToStart = 0;
+volatile uint32_t receivedPackets = 0, droppedPackets = 0;
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
+bool sdReady = false;
+bool captureEnabled = false;
+bool canReady = false;
+uint32_t captureSequence = 0;
+uint32_t lastFaultSPN = 0;
+uint8_t lastFaultFMI = 0;
+uint32_t lastFaultLogMs = 0;
+uint32_t lastBroadcastMs = 0;
+String captureBuffer;
+String captureFilename;
 
-void logFaultToFlash(uint32_t spn, uint8_t fmi) {
-  if (spn == 0 || spn == 524287) return;
-  if (spn == lastLoggedSPN && fmi == lastLoggedFMI && (millis() - lastLogTime < 10000)) return; 
-  
-  lastLoggedSPN = spn;
-  lastLoggedFMI = fmi;
-  lastLogTime = millis();
-
-  File file = LittleFS.open("/faultlog.txt", FILE_APPEND);
-  if (file) {
-    file.printf("SPN: %d | FMI: %d | Miles: %d\n", spn, fmi, (int)totalOdometerMiles);
-    file.close();
-    Serial.printf("Saved Fault to LittleFS: SPN %d FMI %d\n", spn, fmi);
-  }
+uint16_t le16(const uint8_t *data, uint8_t i) {
+  return static_cast<uint16_t>(data[i]) | (static_cast<uint16_t>(data[i + 1]) << 8);
 }
 
-// Part 2: Partition Auto-Discovery & Initialization
+uint32_t le32(const uint8_t *data, uint8_t i) {
+  return static_cast<uint32_t>(data[i]) | (static_cast<uint32_t>(data[i + 1]) << 8) |
+         (static_cast<uint32_t>(data[i + 2]) << 16) | (static_cast<uint32_t>(data[i + 3]) << 24);
+}
 
-bool autodetectAndMountLittleFS() {
-  const char* targetLabel = NULL;
-  esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
-  while (it != NULL) {
-    const esp_partition_t *part = esp_partition_get(it);
-    if (strcmp(part->label, "spiffs") == 0 || 
-        strcmp(part->label, "littlefs") == 0 || 
-        strcmp(part->label, "ffat") == 0 || 
-        strcmp(part->label, "storage") == 0 || 
-        (strcmp(part->label, "coredump") != 0 && part->type == 0x01 && part->subtype == 0x82)) {
-      targetLabel = part->label;
-      Serial.printf("Found flash storage block: '%s' (%d bytes)\n", part->label, part->size);
+String isoTimestamp() {
+  const uint64_t us = esp_timer_get_time();
+  char text[24];
+  snprintf(text, sizeof(text), "%lu.%06lu", static_cast<unsigned long>(us / 1000000ULL),
+           static_cast<unsigned long>(us % 1000000ULL));
+  return String(text);
+}
+
+bool mountStorage() {
+  LittleFS.begin(true);
+  SD_MMC.setPins(Cyd35Pins::SD_CLK, Cyd35Pins::SD_CMD, Cyd35Pins::SD_D0);
+  sdReady = SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT);
+  if (sdReady && !SD_MMC.exists("/diagnostics.csv")) {
+    File f = SD_MMC.open("/diagnostics.csv", FILE_WRITE);
+    if (f) { f.println("uptime_s,event,spn,fmi,odometer_mi,source"); f.close(); }
+  }
+  return sdReady;
+}
+
+void logDiagnostic(uint32_t spn, uint8_t fmi) {
+  if (spn == 0 || spn == 524287 || !sdReady) return;
+  const uint32_t now = millis();
+  if (spn == lastFaultSPN && fmi == lastFaultFMI && now - lastFaultLogMs < 10000) return;
+  lastFaultSPN = spn; lastFaultFMI = fmi; lastFaultLogMs = now;
+  File f = SD_MMC.open("/diagnostics.csv", FILE_APPEND);
+  if (!f) return;
+  f.printf("%s,DM1,%lu,%u,%lu,%u\n", isoTimestamp().c_str(), static_cast<unsigned long>(spn), fmi,
+           static_cast<unsigned long>(totalOdometerMiles), 0U);
+  f.close();
+}
+
+void flushCapture() {
+  if (!sdReady || captureBuffer.isEmpty() || captureFilename.isEmpty()) return;
+  File f = SD_MMC.open(captureFilename, FILE_APPEND);
+  if (!f) { droppedPackets++; return; }
+  f.print(captureBuffer);
+  f.close();
+  captureBuffer = "";
+}
+
+bool setCapture(bool enabled) {
+  if (enabled == captureEnabled) return true;
+  if (enabled && !sdReady) return false;
+  if (enabled) {
+    captureFilename = "/captures/can_" + String(++captureSequence) + ".log";
+    if (!SD_MMC.exists("/captures")) SD_MMC.mkdir("/captures");
+    File f = SD_MMC.open(captureFilename, FILE_WRITE);
+    if (!f) return false;
+    f.println("# ESP32BusDash candump-compatible capture");
+    f.println("# uptime_s CAN_ID#DATA; extended IDs are eight hex digits");
+    f.close();
+    captureBuffer.reserve(8192);
+    captureEnabled = true;
+  } else {
+    flushCapture();
+    captureEnabled = false;
+  }
+  return true;
+}
+
+void appendCapture(const twai_message_t &m) {
+  if (!captureEnabled) return;
+  char data[17] = {0};
+  for (uint8_t i = 0; i < m.data_length_code; ++i) snprintf(data + i * 2, 3, "%02X", m.data[i]);
+  char line[64];
+  snprintf(line, sizeof(line), "%s %08lX#%s\n", isoTimestamp().c_str(),
+           static_cast<unsigned long>(m.identifier), data);
+  if (captureBuffer.length() + strlen(line) > 8192) flushCapture();
+  captureBuffer += line;
+  if (captureBuffer.length() >= CAPTURE_FLUSH_BYTES) flushCapture();
+}
+
+void decodeJ1939(const twai_message_t &m) {
+  if (!m.extd || m.data_length_code != 8) return;
+  const uint32_t pgn = (m.identifier >> 8) & 0x3FFFF;
+  switch (pgn) {
+    case 61444: { const uint16_t raw = le16(m.data, 3); if (raw != 0xFFFF) engineRPM = raw * 0.125f; break; }
+    case 65265: vehicleSpeed = le16(m.data, 1) * 0.00390625f * 0.621371f; break;
+    case 65262: coolantTemp = (m.data[0] - 40) * 1.8f + 32; break;
+    case 65263: oilPressure = m.data[3] * 4.0f * 0.145038f; break;
+    case 65272: transTemp = (le16(m.data, 4) * 0.03125f - 273.0f) * 1.8f + 32; break;
+    case 65198: airPrimary = m.data[2] * 8.0f * 0.145038f; airSecondary = m.data[3] * 8.0f * 0.145038f; break;
+    case 65276: fuelLevel = m.data[1] * 0.4f; break;
+    case 65271: batteryVoltage = le16(m.data, 4) * 0.05f; break;
+    case 65270: turboBoostPSI = m.data[1] * 2.0f * 0.145038f; break;
+    case 65266: fuelRateGPH = le16(m.data, 0) * 0.05f * 0.264172f; break;
+    case 61443: engineLoadPct = m.data[2]; break;
+    case 61445: selectedGearRaw = m.data[0]; break;
+    case 65252: lampWaitToStart = ((m.data[1] >> 6) & 3) == 1; break;
+    case 65248: { const uint32_t raw = le32(m.data, 4); if (raw != 0xFFFFFFFF) totalOdometerMiles = raw * 0.125f * 0.621371f; break; }
+    case 65226: {
+      lampMIL = (m.data[0] >> 6) & 3; lampRedStop = (m.data[0] >> 4) & 3;
+      lampAmberWarning = (m.data[0] >> 2) & 3; lampProtect = m.data[0] & 3;
+      const uint32_t spn = m.data[2] | (m.data[3] << 8) | ((m.data[4] & 0xE0) << 11);
+      activeSPN = (spn == 524287) ? 0 : spn; activeFMI = m.data[4] & 0x1F;
+      logDiagnostic(activeSPN, activeFMI);
       break;
     }
-    it = esp_partition_next(it);
   }
-  esp_partition_iterator_release(it);
-
-  if (targetLabel == NULL) {
-    targetLabel = "spiffs"; 
-    Serial.println("No named storage found. Using default label 'spiffs'.");
-  }
-  return LittleFS.begin(true, "/littlefs", 10, targetLabel);
 }
 
-void setup() {
-  Serial.begin(115200);
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
+void broadcastState() {
+  if (millis() - lastBroadcastMs < 200) return;
+  lastBroadcastMs = millis();
+  String json = "{\"rpm\":" + String(engineRPM, 0) + ",\"speed\":" + String(vehicleSpeed, 0) +
+    ",\"coolant\":" + String(coolantTemp, 0) + ",\"oil\":" + String(oilPressure, 0) +
+    ",\"air1\":" + String(airPrimary, 0) + ",\"air2\":" + String(airSecondary, 0) +
+    ",\"volt\":" + String(batteryVoltage, 1) + ",\"fuel\":" + String(fuelLevel, 0) +
+    ",\"gear\":" + String(selectedGearRaw) + ",\"odo\":" + String(totalOdometerMiles) +
+    ",\"spn\":" + String(activeSPN) + ",\"fmi\":" + String(activeFMI) +
+    ",\"capture\":" + String(captureEnabled ? "true" : "false") + ",\"sd\":" + String(sdReady ? "true" : "false") +
+    ",\"packets\":" + String(receivedPackets) + ",\"dropped\":" + String(droppedPackets) + "}";
+  ws.textAll(json);
+}
 
-  if (autodetectAndMountLittleFS()) {
-    Serial.println("LittleFS filesystem mounted and active.");
-  } else {
-    Serial.println("LittleFS critical initialization failure.");
-  }
-
-  WiFi.softAP("TruckDash", "12345678");
-
-  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(TX_PIN, RX_PIN, TWAI_MODE_LISTEN_ONLY);
-  g_config.rx_queue_len = 64; 
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_250KBITS(); 
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-
-  if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK && twai_start() == ESP_OK) {
-    Serial.println("Unified J1939 Transceiver Pipeline Online.");
-  } else {
-    Serial.println("TWAI Hardware Init Critical Fault.");
-  }
-
+void setupWeb() {
+  ws.onEvent([](AsyncWebSocket *, AsyncWebSocketClient *, AwsEventType, void *, uint8_t *, size_t) {});
   server.addHandler(&ws);
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", index_html);
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *r) { r->send_P(200, "text/html", index_html); });
+  server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *r) {
+    r->send(200, "application/json", String("{\"sd\":") + (sdReady ? "true" : "false") + ",\"capture\":" + (captureEnabled ? "true" : "false") + "}");
   });
-  server.on("/faults", HTTP_GET, [](AsyncWebServerRequest *request){
-    if (LittleFS.exists("/faultlog.txt")) {
-      request->send(LittleFS, "/faultlog.txt", "text/plain");
-    } else {
-      request->send(200, "text/plain", "No saved fault logs found in Flash memory.");
-    }
+  server.on("/api/capture", HTTP_POST, [](AsyncWebServerRequest *r) {
+    const bool enable = r->hasParam("enabled", true) && r->getParam("enabled", true)->value() == "true";
+    if (!setCapture(enable)) { r->send(503, "application/json", "{\"error\":\"SD card unavailable\"}"); return; }
+    r->send(200, "application/json", String("{\"capture\":") + (captureEnabled ? "true" : "false") + "}");
   });
-  server.on("/clearfaults", HTTP_GET, [](AsyncWebServerRequest *request){
-    LittleFS.remove("/faultlog.txt");
-    lastLoggedSPN = 0; lastLoggedFMI = 0;
-    request->send(200, "text/plain", "Flash Log File Wiped Successfully.");
+  server.on("/diagnostics.csv", HTTP_GET, [](AsyncWebServerRequest *r) {
+    if (!sdReady || !SD_MMC.exists("/diagnostics.csv")) { r->send(404, "text/plain", "No diagnostic log on SD card."); return; }
+    r->send(SD_MMC, "/diagnostics.csv", "text/csv", true);
+  });
+  server.on("/captures", HTTP_GET, [](AsyncWebServerRequest *r) {
+    if (!sdReady) { r->send(503, "text/plain", "SD card unavailable."); return; }
+    String list; File dir = SD_MMC.open("/captures"); File f;
+    while ((f = dir.openNextFile())) { list += String(f.name()) + "\n"; f.close(); }
+    r->send(200, "text/plain", list);
   });
   server.begin();
 }
 
-// Part 3: Main Processing Loop (Bus Decoders)
-
-uint16_t readLittleEndian16(const uint8_t *data, uint8_t index) {
-  return (uint16_t)data[index] | ((uint16_t)data[index + 1] << 8);
-}
-
-uint32_t readLittleEndian32(const uint8_t *data, uint8_t index) {
-  return (uint32_t)data[index] |
-         ((uint32_t)data[index + 1] << 8) |
-         ((uint32_t)data[index + 2] << 16) |
-         ((uint32_t)data[index + 3] << 24);
+void setup() {
+  Serial.begin(115200);
+  mountStorage();
+  WiFi.softAP("TruckDash", "12345678"); // Change this before road use.
+  twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_LISTEN_ONLY);
+  g.rx_queue_len = 256;
+  canReady = twai_driver_install(&g, &TWAI_TIMING_CONFIG_250KBITS(), &TWAI_FILTER_CONFIG_ACCEPT_ALL()) == ESP_OK && twai_start() == ESP_OK;
+  setupWeb();
 }
 
 void loop() {
   twai_message_t message;
-  
-  while (twai_receive(&message, pdMS_TO_TICKS(2)) == ESP_OK) {
-    if (!message.extd || message.data_length_code != 8) continue;
-    uint32_t pgn = (message.identifier >> 8) & 0x3FFFF;
-    
-    switch(pgn) {
-      case 61444:
-        {
-          // EEC1 SPN 190 is bytes 4-5 (zero-based bytes 3-4), not bytes 1-2.
-          uint16_t rawRPM = readLittleEndian16(message.data, 3);
-          if (rawRPM != 0xFFFF) {
-            float raw = rawRPM * 0.125;
-            if (raw <= 8000.0) engineRPM = (alphaFast * raw) + ((1.0 - alphaFast) * engineRPM);
-          }
-        }
-        break;
-      case 65265:
-        {
-          // CCVS1 SPN 70 (Parking Brake Switch) is byte 1, bits 3-4.
-          parkBrakeState = (message.data[0] >> 2) & 0x03;
-
-          float raw = (((message.data[2] << 8) | message.data[1]) * 0.00390625) * 0.621371;
-          if (raw <= 120.0) vehicleSpeed = (alphaFast * raw) + ((1.0 - alphaFast) * vehicleSpeed);
-        }
-        break;
-      case 65262:
-        {
-          float raw = ((message.data[0] - 40) * 1.8) + 32;
-          if (raw > -40.0 && raw < 300.0) coolantTemp = (alphaSlow * raw) + ((1.0 - alphaSlow) * coolantTemp);
-        }
-        break;
-      case 65263:
-        {
-          float raw = (message.data[3] * 4.0) * 0.145038;
-          if (raw <= 150.0) oilPressure = (alphaFast * raw) + ((1.0 - alphaFast) * oilPressure);
-        }
-        break;
-      case 65272:
-        {
-          float raw = (((message.data[5] << 8) | message.data[4]) * 0.03125 - 273.0) * 1.8 + 32;
-          if (raw > -40.0 && raw < 400.0) transTemp = (alphaSlow * raw) + ((1.0 - alphaSlow) * transTemp);
-        }
-        break;
-      case 65198:
-        {
-          // Air Supply Pressure: SPN 1087 is byte 3 and SPN 1088 is byte 4.
-          // Both signals use 8 kPa/bit and are converted to PSI here.
-          float raw1 = (message.data[2] * 8.0) * 0.145038;
-          float raw2 = (message.data[3] * 8.0) * 0.145038;
-          if (raw1 <= 200.0) airPrimary = (alphaFast * raw1) + ((1.0 - alphaFast) * airPrimary);
-          if (raw2 <= 200.0) airSecondary = (alphaFast * raw2) + ((1.0 - alphaFast) * airSecondary);
-        }
-        break;
-      case 65276:
-        {
-          float raw = message.data[1] * 0.4;
-          if (raw <= 100.0) fuelLevel = (alphaSlow * raw) + ((1.0 - alphaSlow) * fuelLevel);
-        }
-        break;
-      case 65271:
-        {
-          float raw = ((message.data[5] << 8) | message.data[4]) * 0.05;
-          if (raw > 5.0 && raw < 32.0) batteryVoltage = (alphaSlow * raw) + ((1.0 - alphaSlow) * batteryVoltage);
-        }
-        break;
-      case 65270:
-        {
-          float rawKpa = message.data[1] * 2.0; 
-          float rawPSI = rawKpa * 0.145038;
-          if (rawPSI <= 60.0) turboBoostPSI = (alphaFast * rawPSI) + ((1.0 - alphaFast) * turboBoostPSI);
-        }
-        break;
-      case 65266:
-        {
-          float rawLph = ((message.data[1] << 8) | message.data[0]) * 0.05; 
-          float rawGph = rawLph * 0.264172; 
-          if (rawGph <= 50.0) fuelRateGPH = (alphaSlow * rawGph) + ((1.0 - alphaSlow) * fuelRateGPH);
-        }
-        break;
-      case 61443:
-        {
-          float rawPct = message.data[2]; 
-          if (rawPct <= 100.0) engineLoadPct = (alphaFast * rawPct) + ((1.0 - alphaFast) * engineLoadPct);
-        }
-        break;
-      case 61441:
-        {
-          // EBC1 SPN 563 (Anti-Lock Braking active) is byte 1, bits 5-6.
-          // State 01 means ABS intervention/fault indication active.
-          absFault = (((message.data[0] >> 4) & 0x03) == 0x01) ? 1 : 0;
-        }
-        break;
-      case 61445:
-        // ETC2 SPN 524 (Transmission Selected Gear) is byte 1.
-        selectedGearRaw = message.data[0];
-        break;
-      case 65252:
-        lampWaitToStart = (((message.data[1] >> 6) & 0x03) == 0x01) ? 1 : 0;
-        break;
-      case 65248:
-        {
-          // Vehicle Distance SPN 245 (total distance) is bytes 5-8.
-          uint32_t rawKm = readLittleEndian32(message.data, 4);
-          if (rawKm != 0xFFFFFFFF && rawKm > 0) {
-            totalOdometerMiles = (uint32_t)((rawKm * 0.125) * 0.621371);
-          }
-        }
-        break;
-      case 65226:
-        lampMIL          = (message.data[0] >> 6) & 0x03;
-        lampRedStop      = (message.data[0] >> 4) & 0x03;
-        lampAmberWarning = (message.data[0] >> 2) & 0x03;
-        lampProtect      = (message.data[0]) & 0x03;
-        uint32_t spn = message.data[2] | (message.data[3] << 8) | ((message.data[4] & 0xE0) << 11);
-        uint8_t fmi = message.data[4] & 0x1F;
-        
-        if (spn == 0 || spn == 524287) { 
-          activeSPN = 0; activeFMI = 0; 
-        } else { 
-          activeSPN = spn; activeFMI = fmi; 
-          logFaultToFlash(spn, fmi); 
-        }
-        break;
-    }
+  while (canReady && twai_receive(&message, 0) == ESP_OK) {
+    receivedPackets++;
+    appendCapture(message);
+    decodeJ1939(message);
   }
-
-  if (engineRPM > 400) {
-    alarmActive = (airPrimary < 90.0 || airSecondary < 90.0 || coolantTemp > 220.0 || (batteryVoltage < 11.8 && batteryVoltage > 5.0));
-  } else { alarmActive = false; }
-
-  if (alarmActive) {
-    unsigned long cur = millis();
-    if (cur - lastBuzzerToggle >= 150) {
-      lastBuzzerToggle = cur; buzzerState = !buzzerState;
-      digitalWrite(BUZZER_PIN, buzzerState ? HIGH : LOW);
-    }
-  } else { digitalWrite(BUZZER_PIN, LOW); }
-
-  if (millis() - lastBroadcastTime >= broadcastInterval) {
-    lastBroadcastTime = millis();
-    if (ws.count() > 0) {
-      String json = "{";
-      json += "\"rpm\":" + String(engineRPM) + ",\"speed\":" + String(vehicleSpeed) + ",";
-      json += "\"boost\":" + String(turboBoostPSI) + ",\"gph\":" + String(fuelRateGPH) + ",";
-      json += "\"gear\":" + String(selectedGearRaw) + ",\"load\":" + String(engineLoadPct) + ","; 
-      json += "\"oil\":" + String(oilPressure) + ",\"coolant\":" + String(coolantTemp) + ",";
-      json += "\"trans\":" + String(transTemp) + ",\"air1\":" + String(airPrimary) + ",";
-      json += "\"air2\":" + String(airSecondary) + ",\"volt\":" + String(batteryVoltage) + ",";
-      json += "\"odo\":" + String(totalOdometerMiles) + ",\"fuel\":" + String(fuelLevel) + ",";
-      json += "\"park\":" + String(parkBrakeState) + ",\"abs\":" + String(absFault) + ",";
-      json += "\"lMIL\":" + String(lampMIL) + ",\"lRED\":" + String(lampRedStop) + ",";
-      json += "\"lAMB\":" + String(lampAmberWarning) + ",\"lPRT\":" + String(lampProtect) + ",";
-      json += "\"lWTS\":" + String(lampWaitToStart) + ",\"spn\":" + String(activeSPN) + ",\"fmi\":" + String(activeFMI);
-      json += "}";
-      ws.textAll(json);
-    }
-    ws.cleanupClients();
-  }
+  broadcastState();
+  ws.cleanupClients();
 }
-
-
