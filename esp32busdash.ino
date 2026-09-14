@@ -5,6 +5,7 @@
 #include <SD_MMC.h>
 #include <driver/twai.h>
 #include "cyd35_pins.h"
+#include "cyd_display.h"
 #include "dashboard.h"
 
 // The ESP32-S3 TWAI controller is connected through a 3.3 V CAN transceiver.
@@ -104,6 +105,11 @@ bool setCapture(bool enabled) {
   return true;
 }
 
+// Called by the on-panel CTP menu as well as the browser dashboard.
+bool setPacketCapture(bool enabled) {
+  return setCapture(enabled);
+}
+
 void appendCapture(const twai_message_t &m) {
   if (!captureEnabled) return;
   char data[17] = {0};
@@ -187,10 +193,13 @@ void setupWeb() {
 void setup() {
   Serial.begin(115200);
   mountStorage();
+  if (!cydDisplayBegin()) Serial.println("CYD ST77922 display initialization failed.");
   WiFi.softAP("TruckDash", "12345678"); // Change this before road use.
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_LISTEN_ONLY);
   g.rx_queue_len = 256;
-  canReady = twai_driver_install(&g, &TWAI_TIMING_CONFIG_250KBITS(), &TWAI_FILTER_CONFIG_ACCEPT_ALL()) == ESP_OK && twai_start() == ESP_OK;
+  twai_timing_config_t timing = TWAI_TIMING_CONFIG_250KBITS();
+  twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+  canReady = twai_driver_install(&g, &timing, &filter) == ESP_OK && twai_start() == ESP_OK;
   setupWeb();
 }
 
@@ -202,5 +211,6 @@ void loop() {
     decodeJ1939(message);
   }
   broadcastState();
+  cydDisplayUpdate();
   ws.cleanupClients();
 }

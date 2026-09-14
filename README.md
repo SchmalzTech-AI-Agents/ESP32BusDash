@@ -4,7 +4,7 @@ Read-only J1939 instrument dashboard for the ESP32-S3 3.5-inch CYD labeled **ST7
 
 ## Implemented
 
-- J1939 dashboard via Wi-Fi at `http://192.168.4.1` (AP: `TruckDash`; change the default password before use).
+- Native touch dashboard on the ST77922 panel in 480x320 landscape, plus the Wi-Fi dashboard at `http://192.168.4.1` (AP: `TruckDash`; change the default password before use).
 - Automatic DM1 diagnostic-code logging to `/diagnostics.csv` on the SD card.
 - In-dashboard toggle to capture every received CAN frame to an SD `candump`-compatible text log. Capture files appear in `/captures`.
 - Packet count, SD state, and capture write-failure counter.
@@ -32,9 +32,11 @@ pio device monitor -b 115200
 
 The repository declares all dependencies in `platformio.ini`; no global Arduino library setup is required. Use a 16 MB ESP32-S3 with OPI PSRAM, which is typical for this CYD family.
 
-## Display bring-up note
+## Native display and touch
 
-The ST77922/CTP pin profile is recorded and the project includes `ESP32_Display_Panel` + LVGL dependencies for the native landscape panel. The provided dashboard is currently browser-rendered while the panel UI integration is completed against the exact panel revision. Different CYD batches can ship a different touch-controller firmware or ST77922 initialization sequence; verify the display using the vendor test sketch before flashing into a vehicle.
+`lib/cyd_display` uses Espressif's Apache-2.0 `ESP32_Display_Panel` ST77922 QSPI driver and the CC0 LVGL v8 port example. It rotates the native 320x480 panel clockwise into 480x320 landscape and renders live RPM, speed, coolant, oil, air, voltage, DTC, bus statistics, and the all-packet capture touch toggle.
+
+The CTP profile uses the board's documented I2C pins (SDA 38, SCL 39, RST 48, INT 47) and the Sitronix-compatible `0x55` controller protocol. CYD batches can differ; test the native panel before connecting to a vehicle.
 
 ## Logs
 
