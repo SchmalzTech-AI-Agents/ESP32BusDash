@@ -13,6 +13,7 @@ extern volatile float engineRPM, vehicleSpeed, coolantTemp, oilPressure, airPrim
 extern volatile uint32_t activeSPN, receivedPackets, droppedPackets;
 extern volatile uint8_t activeFMI;
 extern bool captureEnabled;
+extern bool sdReady;
 extern bool setPacketCapture(bool enabled);
 
 namespace {
@@ -24,6 +25,7 @@ LCD *lcd = nullptr;
 BacklightPWM_LEDC *backlight = nullptr;
 lv_obj_t *rpmLabel = nullptr, *speedLabel = nullptr, *coolantLabel = nullptr, *oilLabel = nullptr;
 lv_obj_t *airLabel = nullptr, *voltageLabel = nullptr, *faultLabel = nullptr, *captureLabel = nullptr, *busLabel = nullptr;
+lv_obj_t *statusLabel = nullptr;
 uint32_t lastUpdate = 0;
 
 void setLabel(lv_obj_t *label, const char *format, ...) {
@@ -56,7 +58,13 @@ lv_obj_t *gauge(lv_obj_t *parent, const char *title, int x, int y, int width) {
 }
 
 void captureClicked(lv_event_t *) {
-  setPacketCapture(!captureEnabled);
+  const bool requested = !captureEnabled;
+  if (!setPacketCapture(requested)) {
+    lv_label_set_text(statusLabel, "TOUCH OK - SD CARD REQUIRED FOR CAPTURE");
+    return;
+  }
+  lv_label_set_text(statusLabel, requested ? "TOUCH OK - PACKET CAPTURE STARTED" :
+                                             "TOUCH OK - PACKET CAPTURE STOPPED");
 }
 
 void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
@@ -108,9 +116,12 @@ void panelSelfTest() {
 
 void initTouchInput() {
   pinMode(Cyd35Pins::TOUCH_RST, OUTPUT);
+  // Match the LCD Wiki ST77922 CTP driver's reset timing. A brief pulse can
+  // leave the controller visible on I2C but not reporting touch coordinates.
   digitalWrite(Cyd35Pins::TOUCH_RST, LOW);
-  delay(20);
+  delay(100);
   digitalWrite(Cyd35Pins::TOUCH_RST, HIGH);
+  delay(100);
   Wire.begin(Cyd35Pins::TOUCH_SDA, Cyd35Pins::TOUCH_SCL, 100000);
   static lv_indev_drv_t input;
   lv_indev_drv_init(&input);
@@ -184,6 +195,10 @@ bool cydDisplayBegin() {
   busLabel = lv_label_create(screen);
   lv_obj_set_pos(busLabel, 252, 217);
   lv_obj_set_style_text_color(busLabel, lv_color_hex(0x91a2b9), 0);
+  statusLabel = lv_label_create(screen);
+  lv_obj_set_pos(statusLabel, 10, 272);
+  lv_obj_set_style_text_color(statusLabel, lv_color_hex(0x91a2b9), 0);
+  lv_label_set_text(statusLabel, sdReady ? "TOUCH READY - SD READY" : "TOUCH READY - SD UNAVAILABLE");
   initTouchInput();
   lvgl_port_unlock();
   return true;
