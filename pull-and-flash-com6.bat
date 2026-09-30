@@ -65,7 +65,15 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/2] Building and flashing COM6...
+echo [2/3] Clearing previous generated build files...
+"%PIO%" run -e esp32-s3-cyd35 -t clean
+if errorlevel 1 (
+  echo [ERROR] PlatformIO could not clean the previous build.
+  goto :failed
+)
+
+echo.
+echo [3/3] Building and flashing COM6...
 "%PIO%" run -e esp32-s3-cyd35 -t upload --upload-port COM6
 if errorlevel 1 (
   echo [ERROR] Upload failed.
