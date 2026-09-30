@@ -87,12 +87,15 @@ void panelSelfTest() {
   // A direct, aligned QSPI draw proves the panel profile before LVGL runs.
   // Use native controller geometry here; SCREEN_W/H are the landscape LVGL size.
   static uint16_t rows[PANEL_NATIVE_W * 4];
-  constexpr uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
-  Serial.println("CYD: panel self-test (red, green, blue, white)");
-  for (uint8_t band = 0; band < 4; ++band) {
+  // RGB565 calibration bands, top to bottom: red, green, blue, cyan,
+  // magenta, yellow, white, black. This exposes byte-order/color faults.
+  constexpr uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0x07FF,
+                                 0xF81F, 0xFFE0, 0xFFFF, 0x0000};
+  Serial.println("CYD: RGB565 calibration: red green blue cyan magenta yellow white black");
+  for (uint8_t band = 0; band < 8; ++band) {
     for (uint16_t i = 0; i < PANEL_NATIVE_W * 4; ++i) rows[i] = colors[band];
-    const uint16_t startY = band * (PANEL_NATIVE_H / 4);
-    const uint16_t endY = startY + (PANEL_NATIVE_H / 4);
+    const uint16_t startY = band * (PANEL_NATIVE_H / 8);
+    const uint16_t endY = startY + (PANEL_NATIVE_H / 8);
     for (uint16_t y = startY; y < endY; y += 4) {
       lcd->drawBitmap(0, y, PANEL_NATIVE_W, 4, reinterpret_cast<const uint8_t *>(rows), -1);
     }
