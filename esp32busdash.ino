@@ -192,15 +192,27 @@ void setupWeb() {
 
 void setup() {
   Serial.begin(115200);
-  mountStorage();
+  // Native USB CDC can enumerate after reset; retain the startup log long enough
+  // for the Windows monitor to attach before hardware initialization begins.
+  const uint32_t serialWaitUntil = millis() + 3000;
+  while (!Serial && millis() < serialWaitUntil) delay(10);
+  Serial.println();
+  Serial.println("ESP32BusDash: boot");
+  Serial.println("ESP32BusDash: mounting storage");
+  const bool storageMounted = mountStorage();
+  Serial.printf("ESP32BusDash: SD %s\n", storageMounted ? "ready" : "unavailable");
+  Serial.println("ESP32BusDash: initializing display");
   if (!cydDisplayBegin()) Serial.println("CYD ST77922 display initialization failed.");
   WiFi.softAP("TruckDash", "12345678"); // Change this before road use.
+  Serial.println("ESP32BusDash: Wi-Fi AP started");
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_LISTEN_ONLY);
   g.rx_queue_len = 256;
   twai_timing_config_t timing = TWAI_TIMING_CONFIG_250KBITS();
   twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
   canReady = twai_driver_install(&g, &timing, &filter) == ESP_OK && twai_start() == ESP_OK;
+  Serial.printf("ESP32BusDash: CAN %s\n", canReady ? "ready" : "unavailable");
   setupWeb();
+  Serial.println("ESP32BusDash: ready");
 }
 
 void loop() {
