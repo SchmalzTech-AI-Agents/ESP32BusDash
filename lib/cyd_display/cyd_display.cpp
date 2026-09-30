@@ -25,7 +25,7 @@ LCD *lcd = nullptr;
 BacklightPWM_LEDC *backlight = nullptr;
 lv_obj_t *rpmLabel = nullptr, *speedLabel = nullptr, *coolantLabel = nullptr, *oilLabel = nullptr;
 lv_obj_t *airLabel = nullptr, *voltageLabel = nullptr, *faultLabel = nullptr, *captureLabel = nullptr, *busLabel = nullptr;
-lv_obj_t *statusLabel = nullptr;
+lv_obj_t *statusLabel = nullptr, *captureButton = nullptr;
 uint8_t touchMaxPoints = 0;
 uint32_t lastTouchReport = 0;
 uint32_t lastUpdate = 0;
@@ -59,14 +59,34 @@ lv_obj_t *gauge(lv_obj_t *parent, const char *title, int x, int y, int width) {
   return value;
 }
 
+void refreshCaptureButton() {
+  if (!captureButton || !captureLabel) return;
+  if (captureEnabled) {
+    lv_label_set_text(captureLabel, "STOP PACKET CAPTURE");
+    lv_obj_set_style_bg_color(captureButton, lv_color_hex(0x087f5b), 0);
+  } else if (!sdReady) {
+    lv_label_set_text(captureLabel, "START CAPTURE - SD REQUIRED");
+    lv_obj_set_style_bg_color(captureButton, lv_color_hex(0x7f3e08), 0);
+  } else {
+    lv_label_set_text(captureLabel, "START PACKET CAPTURE");
+    lv_obj_set_style_bg_color(captureButton, lv_color_hex(0x145a8d), 0);
+  }
+}
+
+void capturePressed(lv_event_t *) {
+  if (statusLabel) lv_label_set_text(statusLabel, "TOUCH RECEIVED - RELEASE TO CONFIRM");
+}
+
 void captureClicked(lv_event_t *) {
   const bool requested = !captureEnabled;
   if (!setPacketCapture(requested)) {
-    lv_label_set_text(statusLabel, "TOUCH OK - SD CARD REQUIRED FOR CAPTURE");
+    lv_label_set_text(statusLabel, "CAPTURE NOT STARTED - SD CARD REQUIRED");
+    refreshCaptureButton();
     return;
   }
   lv_label_set_text(statusLabel, requested ? "TOUCH OK - PACKET CAPTURE STARTED" :
                                              "TOUCH OK - PACKET CAPTURE STOPPED");
+  refreshCaptureButton();
 }
 
 bool readTouchRegister(uint16_t reg, uint8_t *data, size_t length) {
@@ -106,7 +126,7 @@ void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
   if (millis() - lastTouchReport >= 250) {
     lastTouchReport = millis();
     Serial.printf("CYD: touch raw=%u,%u landscape=%d,%d\n", rawX, rawY, data->point.x, data->point.y);
-    if (statusLabel) setLabel(statusLabel, "TOUCH %d, %d", data->point.x, data->point.y);
+
   }
 }
 
@@ -231,11 +251,13 @@ bool cydDisplayBegin() {
   airLabel = gauge(screen, "AIR 1 / 2 PSI", 10, 118, 140);
   voltageLabel = gauge(screen, "BATTERY V", 160, 118, 120);
   faultLabel = gauge(screen, "ACTIVE DTC", 290, 118, 180);
-  lv_obj_t *button = lv_btn_create(screen);
-  lv_obj_set_pos(button, 10, 206);
-  lv_obj_set_size(button, 230, 48);
-  lv_obj_add_event_cb(button, captureClicked, LV_EVENT_CLICKED, nullptr);
-  captureLabel = lv_label_create(button);
+  captureButton = lv_btn_create(screen);
+  lv_obj_set_pos(captureButton, 10, 206);
+  lv_obj_set_size(captureButton, 230, 48);
+  lv_obj_set_style_bg_color(captureButton, lv_color_hex(0x145a8d), LV_STATE_PRESSED);
+  lv_obj_add_event_cb(captureButton, capturePressed, LV_EVENT_PRESSED, nullptr);
+  lv_obj_add_event_cb(captureButton, captureClicked, LV_EVENT_CLICKED, nullptr);
+  captureLabel = lv_label_create(captureButton);
   lv_obj_center(captureLabel);
   busLabel = lv_label_create(screen);
   lv_obj_set_pos(busLabel, 252, 217);
@@ -244,6 +266,7 @@ bool cydDisplayBegin() {
   lv_obj_set_pos(statusLabel, 10, 272);
   lv_obj_set_style_text_color(statusLabel, lv_color_hex(0x91a2b9), 0);
   lv_label_set_text(statusLabel, sdReady ? "TOUCH READY - SD READY" : "TOUCH READY - SD UNAVAILABLE");
+  refreshCaptureButton();
   initTouchInput();
   lvgl_port_unlock();
   return true;
@@ -263,7 +286,7 @@ void cydDisplayUpdate() {
   } else {
     lv_label_set_text(faultLabel, "NONE");
   }
-  lv_label_set_text(captureLabel, captureEnabled ? "STOP PACKET CAPTURE" : "START PACKET CAPTURE");
+  refreshCaptureButton();
   setLabel(busLabel, "Packets: %lu\nDrops: %lu", static_cast<unsigned long>(receivedPackets), static_cast<unsigned long>(droppedPackets));
   lvgl_port_unlock();
 }
