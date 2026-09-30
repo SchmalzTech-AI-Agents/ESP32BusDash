@@ -26,6 +26,7 @@ BacklightPWM_LEDC *backlight = nullptr;
 lv_obj_t *rpmLabel = nullptr, *speedLabel = nullptr, *coolantLabel = nullptr, *oilLabel = nullptr;
 lv_obj_t *airLabel = nullptr, *voltageLabel = nullptr, *faultLabel = nullptr, *captureLabel = nullptr, *busLabel = nullptr;
 lv_obj_t *statusLabel = nullptr;
+uint8_t touchMaxPoints = 0;
 uint32_t lastUpdate = 0;
 
 void setLabel(lv_obj_t *label, const char *format, ...) {
@@ -67,22 +68,29 @@ void captureClicked(lv_event_t *) {
                                              "TOUCH OK - PACKET CAPTURE STOPPED");
 }
 
-void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
-  uint8_t reg[] = {static_cast<uint8_t>(TOUCH_POINT0 >> 8), static_cast<uint8_t>(TOUCH_POINT0)};
-  uint8_t point[7] = {};
+bool readTouchRegister(uint16_t reg, uint8_t *data, size_t length) {
+  const uint8_t address[] = {static_cast<uint8_t>(reg >> 8), static_cast<uint8_t>(reg)};
   Wire.beginTransmission(TOUCH_ADDRESS);
-  Wire.write(reg, sizeof(reg));
-  if (Wire.endTransmission(false) != 0 || Wire.requestFrom(TOUCH_ADDRESS, sizeof(point)) != sizeof(point)) {
-    data->state = LV_INDEV_STATE_REL;
-    return;
-  }
-  if (!(point[0] & 0x80)) {
-    data->state = LV_INDEV_STATE_REL;
-    return;
-  }
+  Wire.write(address, sizeof(address));
+  if (Wire.endTransmission(false) != 0) return false;
+  return Wire.requestFrom(TOUCH_ADDRESS, length) == length && Wire.readBytes(data, length) == length;
+}
+
+void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
+  data->state = LV_INDEV_STATE_REL;
+  if (touchMaxPoints == 0) return;
+
+  // Follow the LCD Wiki ST77922 CTP protocol: only read point registers after
+  // TOUCH_INFO reports fresh coordinates (bit 3).
+  uint8_t touchInfo = 0;
+  if (!readTouchRegister(0x0010, &touchInfo, 1) || !(touchInfo & 0x08)) return;
+
+  uint8_t point[7] = {};
+  if (!readTouchRegister(TOUCH_POINT0, point, sizeof(point)) || !(point[0] & 0x80)) return;
+
   const uint16_t rawX = ((point[0] & 0x3F) << 8) | point[1];
   const uint16_t rawY = ((point[2] & 0x3F) << 8) | point[3];
-  // Same clockwise landscape transform used by the vendor ST77922 CTP driver.
+  // LCD Wiki rotation 1: native 320x480 CTP to landscape 480x320 LVGL.
   data->point.x = rawY >= SCREEN_W ? SCREEN_W - 1 : rawY;
   data->point.y = rawX >= SCREEN_H ? 0 : SCREEN_H - 1 - rawX;
   data->state = LV_INDEV_STATE_PR;
@@ -122,7 +130,28 @@ void initTouchInput() {
   delay(100);
   digitalWrite(Cyd35Pins::TOUCH_RST, HIGH);
   delay(100);
+  pinMode(Cyd35Pins::TOUCH_SDA, INPUT_PULLUP);
+  pinMode(Cyd35Pins::TOUCH_SCL, INPUT_PULLUP);
+  pinMode(Cyd35Pins::TOUCH_INT, INPUT);
   Wire.begin(Cyd35Pins::TOUCH_SDA, Cyd35Pins::TOUCH_SCL, 100000);
+  Wire.setTimeOut(1000);
+
+  // Initialize exactly as LCD Wiki's ST77922_TOUCH library does.  The maximum
+  // point count is also a positive I2C probe, so do not register a dead input.
+  uint8_t status = 0xFF;
+  for (uint8_t attempt = 0; attempt < 20; ++attempt) {
+    if (readTouchRegister(0x0010, &status, 1) && !(status & 0x0F)) break;
+    delay(10);
+  }
+  if (!readTouchRegister(0x0009, &touchMaxPoints, 1) || touchMaxPoints == 0 || touchMaxPoints > 10) {
+    touchMaxPoints = 0;
+    Serial.println("CYD: CTP not detected at I2C address 0x55");
+    if (statusLabel) lv_label_set_text(statusLabel, "TOUCH OFFLINE - CHECK CTP");
+    return;
+  }
+  Serial.printf("CYD: CTP ready at I2C 0x55 (%u points)\n", touchMaxPoints);
+  if (statusLabel) lv_label_set_text(statusLabel, sdReady ? "TOUCH READY - SD READY" : "TOUCH READY - SD UNAVAILABLE");
+
   static lv_indev_drv_t input;
   lv_indev_drv_init(&input);
   input.type = LV_INDEV_TYPE_POINTER;
