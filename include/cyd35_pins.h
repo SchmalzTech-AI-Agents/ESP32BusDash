@@ -28,6 +28,10 @@ constexpr int TOUCH_SCL = 39;
 constexpr int TOUCH_RST = 48;
 constexpr int TOUCH_INT = 47;
 
+// Board-mounted RGB indicator. Manufacturer examples use WS2812-compatible
+// 800 kHz GRBW timing on this pin.
+constexpr int STATUS_LED = 40;
+
 // The ES8311 audio path's external amplifier enable is active-low. This is
 // AP_ENABLE in the manufacturer music, echo, and AI-chat Arduino examples.
 constexpr int AUDIO_AMP_ENABLE = 1;

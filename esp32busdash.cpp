@@ -7,6 +7,7 @@
 #include "cyd35_pins.h"
 #include "cyd_audio.h"
 #include "cyd_display.h"
+#include "cyd_status_led.h"
 #include "dashboard.h"
 
 // The ESP32-S3 TWAI controller is connected through a 3.3 V CAN transceiver.
@@ -199,6 +200,8 @@ void setup() {
   while (!Serial && millis() < serialWaitUntil) delay(10);
   Serial.println();
   Serial.println("ESP32BusDash: boot");
+  cydStatusLedBegin();
+  Serial.println("ESP32BusDash: RGB status LED rainbow enabled");
   Serial.println("ESP32BusDash: mounting storage");
   const bool storageMounted = mountStorage();
   Serial.printf("ESP32BusDash: SD %s\n", storageMounted ? "ready" : "unavailable");
@@ -225,6 +228,7 @@ void loop() {
     decodeJ1939(message);
   }
   broadcastState();
+  cydStatusLedUpdate();
   cydDisplayUpdate();
   ws.cleanupClients();
 }
