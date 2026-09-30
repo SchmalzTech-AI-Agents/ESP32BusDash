@@ -3,6 +3,7 @@
 #include <esp_display_panel.hpp>
 #include <lvgl.h>
 #include "cyd35_pins.h"
+#include "st77922_vendor_init.h"
 #include "cyd_display.h"
 #include "lvgl_v8_port.h"
 
@@ -131,6 +132,11 @@ bool cydDisplayBegin() {
                           Cyd35Pins::LCD_D1, Cyd35Pins::LCD_D2, Cyd35Pins::LCD_D3);
   bus->configQSPI_FreqHz(40000000);
   lcd = new LCD_ST77922(bus, 320, 480, 16, -1);
+  if (!lcd->configVendorCommands(Cyd35VendorInit::commands,
+                                 sizeof(Cyd35VendorInit::commands) / sizeof(Cyd35VendorInit::commands[0]))) {
+    Serial.println("CYD: could not configure vendor ST77922 initialization sequence");
+    return false;
+  }
   if (!lcd->begin()) {
     Serial.println("CYD: ST77922 QSPI panel initialization failed");
     return false;
