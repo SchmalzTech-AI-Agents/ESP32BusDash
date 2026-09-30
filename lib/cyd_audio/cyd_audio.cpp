@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <driver/i2s_std.h>
 #include "cyd_audio.h"
+#include "cyd35_pins.h"
 
 namespace {
 constexpr uint8_t ES8311_ADDRESS = 0x18;
@@ -67,6 +68,11 @@ bool initI2s() {
 
 bool cydPlayBootTone() {
   Serial.println("CYD: initializing ES8311 speaker boot tone");
+  // The manufacturer examples explicitly pull AP_ENABLE (GPIO1) LOW before
+  // initializing ES8311. Without this, I2S and the codec can work normally
+  // while the board's amplified speaker/output path remains muted.
+  pinMode(Cyd35Pins::AUDIO_AMP_ENABLE, OUTPUT);
+  digitalWrite(Cyd35Pins::AUDIO_AMP_ENABLE, LOW);
   if (!initCodec()) {
     Serial.println("CYD: ES8311 codec was not detected at I2C 0x18");
     return false;

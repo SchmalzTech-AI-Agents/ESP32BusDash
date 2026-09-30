@@ -28,6 +28,10 @@ constexpr int TOUCH_SCL = 39;
 constexpr int TOUCH_RST = 48;
 constexpr int TOUCH_INT = 47;
 
+// The ES8311 audio path's external amplifier enable is active-low. This is
+// AP_ENABLE in the manufacturer music, echo, and AI-chat Arduino examples.
+constexpr int AUDIO_AMP_ENABLE = 1;
+
 constexpr int DISPLAY_WIDTH = 480;
 constexpr int DISPLAY_HEIGHT = 320;
 }  // namespace Cyd35Pins
