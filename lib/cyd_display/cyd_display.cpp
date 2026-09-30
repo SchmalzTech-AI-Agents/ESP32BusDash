@@ -94,9 +94,11 @@ void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
 
   const uint16_t rawX = ((report[0] & 0x3F) << 8) | report[1];
   const uint16_t rawY = ((report[2] & 0x3F) << 8) | report[3];
-  // LCD Wiki rotation 1: native 320x480 CTP to landscape 480x320 LVGL.
-  data->point.x = rawY >= SCREEN_W ? SCREEN_W - 1 : rawY;
-  data->point.y = rawX >= SCREEN_H ? 0 : SCREEN_H - 1 - rawX;
+  // On this panel the manufacturer CTP reports landscape coordinates inverted
+  // relative to LVGL's rotated viewport: physical upper-left was 479,319 and
+  // lower-right was 0,0. Rotate 180 degrees to make LVGL origin upper-left.
+  data->point.x = rawY >= SCREEN_W ? 0 : SCREEN_W - 1 - rawY;
+  data->point.y = rawX >= SCREEN_H ? SCREEN_H - 1 : rawX;
   data->state = LV_INDEV_STATE_PR;
 
   // Visible and serial evidence of actual CTP samples, rate-limited so normal
