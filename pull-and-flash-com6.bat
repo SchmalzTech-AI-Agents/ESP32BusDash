@@ -9,9 +9,20 @@ set "PIO=pio"
 where pio >nul 2>&1
 if not errorlevel 1 goto :pio_ready
 
+REM Some Windows PlatformIO installations expose platformio.exe, not pio.exe.
+where platformio >nul 2>&1
+if not errorlevel 1 (
+  set "PIO=platformio"
+  goto :pio_ready
+)
+
 REM PlatformIO Core's standard per-user Windows installation location.
 if exist "%USERPROFILE%\.platformio\penv\Scripts\pio.exe" (
   set "PIO=%USERPROFILE%\.platformio\penv\Scripts\pio.exe"
+  goto :pio_ready
+)
+if exist "%USERPROFILE%\.platformio\penv\Scripts\platformio.exe" (
+  set "PIO=%USERPROFILE%\.platformio\penv\Scripts\platformio.exe"
   goto :pio_ready
 )
 
