@@ -27,6 +27,7 @@ lv_obj_t *rpmLabel = nullptr, *speedLabel = nullptr, *coolantLabel = nullptr, *o
 lv_obj_t *airLabel = nullptr, *voltageLabel = nullptr, *faultLabel = nullptr, *captureLabel = nullptr, *busLabel = nullptr;
 lv_obj_t *statusLabel = nullptr;
 uint8_t touchMaxPoints = 0;
+uint32_t lastTouchReport = 0;
 uint32_t lastUpdate = 0;
 
 void setLabel(lv_obj_t *label, const char *format, ...) {
@@ -85,15 +86,26 @@ void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
   uint8_t touchInfo = 0;
   if (!readTouchRegister(0x0010, &touchInfo, 1) || !(touchInfo & 0x08)) return;
 
-  uint8_t point[7] = {};
-  if (!readTouchRegister(TOUCH_POINT0, point, sizeof(point)) || !(point[0] & 0x80)) return;
+  // The CTP requires its complete 7-byte-per-point report to be consumed;
+  // reading only point 0 can leave its fresh-data latch asserted.
+  uint8_t report[7 * 10] = {};
+  const size_t reportSize = static_cast<size_t>(touchMaxPoints) * 7;
+  if (!readTouchRegister(TOUCH_POINT0, report, reportSize) || !(report[0] & 0x80)) return;
 
-  const uint16_t rawX = ((point[0] & 0x3F) << 8) | point[1];
-  const uint16_t rawY = ((point[2] & 0x3F) << 8) | point[3];
+  const uint16_t rawX = ((report[0] & 0x3F) << 8) | report[1];
+  const uint16_t rawY = ((report[2] & 0x3F) << 8) | report[3];
   // LCD Wiki rotation 1: native 320x480 CTP to landscape 480x320 LVGL.
   data->point.x = rawY >= SCREEN_W ? SCREEN_W - 1 : rawY;
   data->point.y = rawX >= SCREEN_H ? 0 : SCREEN_H - 1 - rawX;
   data->state = LV_INDEV_STATE_PR;
+
+  // Visible and serial evidence of actual CTP samples, rate-limited so normal
+  // use remains quiet. This distinguishes raw touch from LVGL button mapping.
+  if (millis() - lastTouchReport >= 250) {
+    lastTouchReport = millis();
+    Serial.printf("CYD: touch raw=%u,%u landscape=%d,%d\n", rawX, rawY, data->point.x, data->point.y);
+    if (statusLabel) setLabel(statusLabel, "TOUCH %d, %d", data->point.x, data->point.y);
+  }
 }
 
 constexpr uint16_t PANEL_NATIVE_W = 320;
