@@ -93,7 +93,10 @@ void panelSelfTest() {
                                  0xF81F, 0xFFE0, 0xFFFF, 0x0000};
   Serial.println("CYD: RGB565 calibration: red green blue cyan magenta yellow white black");
   for (uint8_t band = 0; band < 8; ++band) {
-    for (uint16_t i = 0; i < PANEL_NATIVE_W * 4; ++i) rows[i] = colors[band];
+    // QSPI sends bytes in memory order. RGB565 pixels must be big-endian on
+    // this ST77922, so store a byte-swapped native value for the transfer.
+    const uint16_t wireColor = __builtin_bswap16(colors[band]);
+    for (uint16_t i = 0; i < PANEL_NATIVE_W * 4; ++i) rows[i] = wireColor;
     const uint16_t startY = band * (PANEL_NATIVE_H / 8);
     const uint16_t endY = startY + (PANEL_NATIVE_H / 8);
     for (uint16_t y = startY; y < endY; y += 4) {
