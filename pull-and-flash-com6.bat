@@ -32,16 +32,33 @@ echo then run this file from PlatformIO's terminal, or add pio.exe to PATH.
 goto :failed
 
 :pio_ready
+set "GIT=git"
 where git >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] Git was not found on PATH.
-  echo Install Git for Windows, then run this file again.
-  goto :failed
+if not errorlevel 1 goto :git_ready
+
+REM Git for Windows is normally installed in one of these locations.
+if exist "%ProgramFiles%\Git\cmd\git.exe" (
+  set "GIT=%ProgramFiles%\Git\cmd\git.exe"
+  goto :git_ready
 )
+if exist "%ProgramFiles(x86)%\Git\cmd\git.exe" (
+  set "GIT=%ProgramFiles(x86)%\Git\cmd\git.exe"
+  goto :git_ready
+)
+if exist "%LocalAppData%\Programs\Git\cmd\git.exe" (
+  set "GIT=%LocalAppData%\Programs\Git\cmd\git.exe"
+  goto :git_ready
+)
+
+echo [ERROR] Git for Windows was not found.
+echo Install Git for Windows, then close and reopen VS Code before retrying.
+goto :failed
+
+:git_ready
 
 echo.
 echo [1/2] Updating ESP32BusDash from GitHub...
-git pull --ff-only origin main
+"%GIT%" pull --ff-only origin main
 if errorlevel 1 (
   echo [ERROR] Git update failed. Resolve any local changes, then retry.
   goto :failed
