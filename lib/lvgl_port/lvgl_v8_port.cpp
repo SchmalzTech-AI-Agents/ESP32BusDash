@@ -538,6 +538,15 @@ void rounder_callback(lv_disp_drv_t *drv, lv_area_t *area)
     uint8_t x_align = lcd->getBasicAttributes().basic_bus_spec.x_coord_align;
     uint8_t y_align = lcd->getBasicAttributes().basic_bus_spec.y_coord_align;
 
+    // LVGL software rotation maps logical Y onto the QSPI panel's physical X.
+    // ST77922 QSPI requires physical X transfers to be multiples of four pixels,
+    // so rotate the alignment constraint with the logical coordinate system.
+    if ((drv->rotated == LV_DISP_ROT_90) || (drv->rotated == LV_DISP_ROT_270)) {
+        const uint8_t align = x_align;
+        x_align = y_align;
+        y_align = align;
+    }
+
     if (x_align > 1) {
         // round the start of coordinate down to the nearest aligned value
         area->x1 &= ~(x_align - 1);
