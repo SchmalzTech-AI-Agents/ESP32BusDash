@@ -130,14 +130,16 @@ void initTouchInput() {
   delay(100);
   digitalWrite(Cyd35Pins::TOUCH_RST, HIGH);
   delay(100);
+  // The board's current Arduino core exposes this peripheral through Wire.
+  // Use the manufacturer-defined I2C0 pins/address and the IDF demo's 400 kHz
+  // bus rate, with internal pull-ups enabled on the shared audio/CTP bus.
   pinMode(Cyd35Pins::TOUCH_SDA, INPUT_PULLUP);
   pinMode(Cyd35Pins::TOUCH_SCL, INPUT_PULLUP);
-  pinMode(Cyd35Pins::TOUCH_INT, INPUT);
-  Wire.begin(Cyd35Pins::TOUCH_SDA, Cyd35Pins::TOUCH_SCL, 100000);
+  pinMode(Cyd35Pins::TOUCH_INT, INPUT_PULLUP);
+  Wire.begin(Cyd35Pins::TOUCH_SDA, Cyd35Pins::TOUCH_SCL, 400000);
   Wire.setTimeOut(1000);
 
-  // Initialize exactly as LCD Wiki's ST77922_TOUCH library does.  The maximum
-  // point count is also a positive I2C probe, so do not register a dead input.
+  // Match the vendor ST77922_TOUCH CTP reset and probe sequence.
   uint8_t status = 0xFF;
   for (uint8_t attempt = 0; attempt < 20; ++attempt) {
     if (readTouchRegister(0x0010, &status, 1) && !(status & 0x0F)) break;
@@ -149,7 +151,7 @@ void initTouchInput() {
     if (statusLabel) lv_label_set_text(statusLabel, "TOUCH OFFLINE - CHECK CTP");
     return;
   }
-  Serial.printf("CYD: CTP ready at I2C 0x55 (%u points)\n", touchMaxPoints);
+  Serial.printf("CYD: CTP ready at I2C 0x55 (%u points, 400 kHz)\n", touchMaxPoints);
   if (statusLabel) lv_label_set_text(statusLabel, sdReady ? "TOUCH READY - SD READY" : "TOUCH READY - SD UNAVAILABLE");
 
   static lv_indev_drv_t input;
