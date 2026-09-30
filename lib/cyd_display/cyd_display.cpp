@@ -94,19 +94,40 @@ void initTouchInput() {
 }  // namespace
 
 bool cydDisplayBegin() {
+  Serial.println("CYD: starting documented ST77922 QSPI display profile");
+
+  // LCD Wiki specifies an active-high backlight on GPIO41. Drive it high before
+  // panel startup so a panel-init failure cannot look like a powered-off screen.
+  pinMode(Cyd35Pins::LCD_BL, OUTPUT);
+  digitalWrite(Cyd35Pins::LCD_BL, HIGH);
   backlight = new BacklightPWM_LEDC(Cyd35Pins::LCD_BL, 1);
-  backlight->begin();
-  backlight->off();
+  if (!backlight->begin()) {
+    Serial.println("CYD: backlight PWM initialization failed");
+    return false;
+  }
+  backlight->on();
+
   auto *bus = new BusQSPI(Cyd35Pins::LCD_CS, Cyd35Pins::LCD_SCLK, Cyd35Pins::LCD_D0,
                           Cyd35Pins::LCD_D1, Cyd35Pins::LCD_D2, Cyd35Pins::LCD_D3);
   bus->configQSPI_FreqHz(40000000);
   lcd = new LCD_ST77922(bus, 320, 480, 16, -1);
-  if (!lcd->begin()) return false;
-  // Portrait-native panel, rotated clockwise into 480x320 landscape.
-  lcd->swapXY(true);
-  lcd->displayOn();
-  backlight->on();
-  if (!lvgl_port_init(lcd, nullptr) || !lvgl_port_lock(-1)) return false;
+  if (!lcd->begin()) {
+    Serial.println("CYD: ST77922 QSPI panel initialization failed");
+    return false;
+  }
+  lcd->setDisplayOnOff(true);
+
+  if (!lvgl_port_init(lcd, nullptr)) {
+    Serial.println("CYD: LVGL display-port initialization failed");
+    return false;
+  }
+  // ST77922/QSPI has no hardware swap-XY capability. LVGL performs the
+  // 90-degree coordinate transform while the controller stays 320x480 native.
+  lv_disp_set_rotation(lv_disp_get_default(), LV_DISP_ROT_90);
+  if (!lvgl_port_lock(-1)) {
+    Serial.println("CYD: LVGL lock creation failed");
+    return false;
+  }
 
   lv_obj_t *screen = lv_scr_act();
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x070b12), 0);
