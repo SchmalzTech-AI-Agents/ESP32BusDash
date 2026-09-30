@@ -114,11 +114,12 @@ void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
 
   const uint16_t rawX = ((report[0] & 0x3F) << 8) | report[1];
   const uint16_t rawY = ((report[2] & 0x3F) << 8) | report[3];
-  // On this panel the manufacturer CTP reports landscape coordinates inverted
-  // relative to LVGL's rotated viewport: physical upper-left was 479,319 and
-  // lower-right was 0,0. Rotate 180 degrees to make LVGL origin upper-left.
-  data->point.x = rawY >= SCREEN_W ? 0 : SCREEN_W - 1 - rawY;
-  data->point.y = rawX >= SCREEN_H ? SCREEN_H - 1 : rawX;
+  // Supply unmodified native 320x480 CTP coordinates. LVGL v8 applies the
+  // display's LV_DISP_ROT_90 transform to pointer input after this callback.
+  // Pre-rotating here transformed the coordinates twice, so no on-screen
+  // object was hit even though the CTP itself reported valid points.
+  data->point.x = rawX >= SCREEN_H ? SCREEN_H - 1 : rawX;
+  data->point.y = rawY >= SCREEN_W ? SCREEN_W - 1 : rawY;
   data->state = LV_INDEV_STATE_PR;
 
   // Visible and serial evidence of actual CTP samples, rate-limited so normal
