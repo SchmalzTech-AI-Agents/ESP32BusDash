@@ -538,14 +538,12 @@ void rounder_callback(lv_disp_drv_t *drv, lv_area_t *area)
     uint8_t x_align = lcd->getBasicAttributes().basic_bus_spec.x_coord_align;
     uint8_t y_align = lcd->getBasicAttributes().basic_bus_spec.y_coord_align;
 
-    // Software rotation can transform either logical axis into physical X before
-    // the QSPI flush. Round both logical axes on a rotated display so every
-    // physical ST77922 transfer begins and ends on its required 4-pixel boundary.
-    if ((drv->rotated == LV_DISP_ROT_90) || (drv->rotated == LV_DISP_ROT_270)) {
-        const uint8_t align = (x_align > y_align) ? x_align : y_align;
-        x_align = align;
-        y_align = align;
-    }
+    // QSPI requires physical X transfers in multiples of four pixels. LVGL's
+    // software rotation may apply its coordinate transform after this callback,
+    // so conservatively align both logical axes for every refresh.
+    const uint8_t align = (x_align > y_align) ? x_align : y_align;
+    x_align = align;
+    y_align = align;
 
     if (x_align > 1) {
         // round the start of coordinate down to the nearest aligned value
