@@ -5,6 +5,7 @@
 #include <SD_MMC.h>
 #include <driver/twai.h>
 #include "cyd35_pins.h"
+#include "cyd_audio.h"
 #include "cyd_display.h"
 #include "dashboard.h"
 
@@ -203,6 +204,7 @@ void setup() {
   Serial.printf("ESP32BusDash: SD %s\n", storageMounted ? "ready" : "unavailable");
   Serial.println("ESP32BusDash: initializing display");
   if (!cydDisplayBegin()) Serial.println("CYD ST77922 display initialization failed.");
+  if (!cydPlayBootTone()) Serial.println("CYD speaker boot tone unavailable.");
   WiFi.softAP("TruckDash", "12345678"); // Change this before road use.
   Serial.println("ESP32BusDash: Wi-Fi AP started");
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_LISTEN_ONLY);
