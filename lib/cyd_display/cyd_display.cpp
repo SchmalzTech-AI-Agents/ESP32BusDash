@@ -79,18 +79,21 @@ void touchRead(lv_indev_drv_t *, lv_indev_data_t *data) {
   data->state = LV_INDEV_STATE_PR;
 }
 
+constexpr uint16_t PANEL_NATIVE_W = 320;
+constexpr uint16_t PANEL_NATIVE_H = 480;
+
 void panelSelfTest() {
   // A direct, aligned QSPI draw proves the panel profile before LVGL runs.
-  // It remains on screen long enough to be observed after a reset.
-  static uint16_t rows[SCREEN_W * 4];
+  // Use native controller geometry here; SCREEN_W/H are the landscape LVGL size.
+  static uint16_t rows[PANEL_NATIVE_W * 4];
   constexpr uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
   Serial.println("CYD: panel self-test (red, green, blue, white)");
   for (uint8_t band = 0; band < 4; ++band) {
-    for (uint16_t i = 0; i < SCREEN_W * 4; ++i) rows[i] = colors[band];
-    const uint16_t startY = band * (SCREEN_H / 4);
-    const uint16_t endY = startY + (SCREEN_H / 4);
+    for (uint16_t i = 0; i < PANEL_NATIVE_W * 4; ++i) rows[i] = colors[band];
+    const uint16_t startY = band * (PANEL_NATIVE_H / 4);
+    const uint16_t endY = startY + (PANEL_NATIVE_H / 4);
     for (uint16_t y = startY; y < endY; y += 4) {
-      lcd->drawBitmap(0, y, SCREEN_W, 4, reinterpret_cast<const uint8_t *>(rows), -1);
+      lcd->drawBitmap(0, y, PANEL_NATIVE_W, 4, reinterpret_cast<const uint8_t *>(rows), -1);
     }
   }
   delay(4000);
